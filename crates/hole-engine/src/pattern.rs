@@ -23,6 +23,14 @@ pub enum Pattern {
         max: Option<usize>,
         greedy: bool,
     },
+    /// Separated repetition: `min..=max` occurrences of `item` separated by `sep`.
+    SepBy {
+        item: Box<Pattern>,
+        sep: Box<Pattern>,
+        min: usize,
+        max: Option<usize>,
+        greedy: bool,
+    },
     /// Negative lookahead: succeeds (consuming zero bytes) iff `inner` fails.
     Not(Box<Pattern>),
     /// Positive lookahead: succeeds (consuming zero bytes) iff `inner` succeeds.
@@ -99,6 +107,9 @@ pub enum CaseStyle {
     Slug,
 }
 
+/// Default length of a NanoID when no explicit length is specified.
+pub const DEFAULT_NANOID_LENGTH: usize = 21;
+
 /// Built-in domain and type matchers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuiltinMatcher {
@@ -112,22 +123,52 @@ pub enum BuiltinMatcher {
         min: Option<u64>,
         max: Option<u64>,
     },
+    /// Floating-point number (`-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?`).
+    Float,
+    /// Boolean literal (`true` or `false`).
+    Bool,
     /// Semantic version (`MAJOR.MINOR.PATCH` with optional `-pre` and `+build`).
     Version,
     /// ISO 8601 calendar date (`YYYY-MM-DD`).
     Date,
+    /// ISO 8601 date or date-time (`YYYY-MM-DD`, optionally followed by `T` or space, time, and offset).
+    Datetime,
     /// Canonical hyphenated UUID (`8-4-4-4-12` hex digits).
     Uuid,
+    /// URL-safe NanoID (`[A-Za-z0-9_-]{N}`), defaulting to [`DEFAULT_NANOID_LENGTH`] (21) characters.
+    Nanoid {
+        length: Option<usize>,
+    },
     /// Naming convention matcher.
     Case(CaseStyle),
     /// Non-empty single path segment (never crosses `/`).
     Seg,
+    /// Multi-segment path subtree matching `min_depth..=max_depth` clean segments separated by `/`.
+    Tree {
+        min_depth: usize,
+        max_depth: Option<usize>,
+    },
 }
 
 impl Pattern {
     /// Creates a literal pattern.
     pub fn lit(s: impl Into<String>) -> Self {
         Self::Literal(s.into())
+    }
+
+    /// Matches a single character belonging to `chars`.
+    pub fn chars(chars: impl Into<String>) -> Self {
+        Self::Class(CharClass::OneOf(chars.into()))
+    }
+
+    /// Matches a single character not belonging to `chars`.
+    pub fn not_chars(chars: impl Into<String>) -> Self {
+        Self::Class(CharClass::NoneOf(chars.into()))
+    }
+
+    /// Matches a single character within the inclusive range `start..=end`.
+    pub fn range(start: char, end: char) -> Self {
+        Self::Class(CharClass::Range(start, end))
     }
 
     /// Creates a sequence pattern.
@@ -140,34 +181,79 @@ impl Pattern {
         Self::Alt(branches)
     }
 
-    /// Creates an optional (`0..=1`) greedy pattern.
-    pub fn opt(inner: Pattern) -> Self {
+    /// Creates a bounded or unbounded repetition pattern.
+    pub fn repeat(inner: Pattern, min: usize, max: Option<usize>, greedy: bool) -> Self {
         Self::Repeat {
             inner: Box::new(inner),
-            min: 0,
-            max: Some(1),
-            greedy: true,
+            min,
+            max,
+            greedy,
         }
+    }
+
+    /// Creates an optional (`0..=1`) greedy pattern.
+    pub fn opt(inner: Pattern) -> Self {
+        Self::repeat(inner, 0, Some(1), true)
     }
 
     /// Creates a zero-or-more (`0..`) greedy pattern.
     pub fn many(inner: Pattern) -> Self {
-        Self::Repeat {
-            inner: Box::new(inner),
-            min: 0,
-            max: None,
-            greedy: true,
-        }
+        Self::repeat(inner, 0, None, true)
     }
 
     /// Creates a one-or-more (`1..`) greedy pattern.
     pub fn many1(inner: Pattern) -> Self {
-        Self::Repeat {
-            inner: Box::new(inner),
-            min: 1,
-            max: None,
-            greedy: true,
+        Self::repeat(inner, 1, None, true)
+    }
+
+    /// Matches zero or more occurrences of `item` separated by `sep`.
+    pub fn sep_by(item: Pattern, sep: Pattern) -> Self {
+        Self::sep_by_range(item, sep, 0, None, true)
+    }
+
+    /// Matches one or more occurrences of `item` separated by `sep`.
+    pub fn sep_by1(item: Pattern, sep: Pattern) -> Self {
+        Self::sep_by_range(item, sep, 1, None, true)
+    }
+
+    /// Matches `min..=max` occurrences of `item` separated by `sep`.
+    pub fn sep_by_range(
+        item: Pattern,
+        sep: Pattern,
+        min: usize,
+        max: Option<usize>,
+        greedy: bool,
+    ) -> Self {
+        Self::SepBy {
+            item: Box::new(item),
+            sep: Box::new(sep),
+            min,
+            max,
+            greedy,
         }
+    }
+
+    /// Positive lookahead: succeeds (consuming zero bytes) iff `inner` succeeds.
+    pub fn followed_by(inner: Pattern) -> Self {
+        Self::Lookahead(Box::new(inner))
+    }
+
+    /// Negative lookahead: succeeds (consuming zero bytes) iff `inner` fails.
+    pub fn not_followed_by(inner: Pattern) -> Self {
+        Self::Not(Box::new(inner))
+    }
+
+    /// Matches a non-empty single path segment (never crosses `/`).
+    pub fn seg() -> Self {
+        Self::Builtin(BuiltinMatcher::Seg)
+    }
+
+    /// Matches a multi-segment path subtree with depth in `min_depth..=max_depth`.
+    pub fn tree(min_depth: usize, max_depth: Option<usize>) -> Self {
+        Self::Builtin(BuiltinMatcher::Tree {
+            min_depth,
+            max_depth,
+        })
     }
 
     /// Wraps `self` in a named or anonymous capture.

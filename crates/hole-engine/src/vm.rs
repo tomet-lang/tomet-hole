@@ -1,6 +1,6 @@
 //! Bytecode virtual machine and built-in matcher evaluation for `hole-engine`.
 
-use crate::pattern::{BuiltinMatcher, CaseStyle};
+use crate::pattern::{BuiltinMatcher, CaseStyle, DEFAULT_NANOID_LENGTH};
 use crate::program::{Op, Program};
 
 const DEFAULT_MAX_STEPS: usize = 1_000_000;
@@ -28,6 +28,16 @@ impl Capture {
         }
         None
     }
+
+    /// Collects all captures matching `name` in pre-order (self and descendants).
+    pub fn get_all<'a>(&'a self, name: &str, out: &mut Vec<&'a Capture>) {
+        if self.name.as_deref() == Some(name) {
+            out.push(self);
+        }
+        for child in &self.children {
+            child.get_all(name, out);
+        }
+    }
 }
 
 /// The result of a successful pattern match.
@@ -49,12 +59,35 @@ impl Match {
         }
         None
     }
+
+    /// Returns all captures with the given `name` in pre-order.
+    pub fn get_all(&self, name: &str) -> Vec<&Capture> {
+        let mut out = Vec::new();
+        for cap in &self.captures {
+            cap.get_all(name, &mut out);
+        }
+        out
+    }
+
+    /// Expands a replacement [`Template`](crate::Template) against this match's captures.
+    pub fn expand(&self, template: &crate::Template) -> Result<String, crate::TemplateError> {
+        template.expand(self)
+    }
 }
 
 #[derive(Debug, Clone)]
 enum CapEvent {
-    Open { name: Option<String>, pos: usize },
-    Close { pos: usize },
+    Open {
+        name: Option<String>,
+        site: usize,
+        pos: usize,
+    },
+    Close {
+        name: Option<String>,
+        site: usize,
+        start: usize,
+        end: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -83,12 +116,15 @@ impl Program {
 
     /// Matches `input` from start (`0`) to end (`input.len()`).
     pub fn match_full(&self, input: &str) -> Option<Match> {
-        let m = self.match_at(input, 0)?;
-        if m.end == input.len() { Some(m) } else { None }
+        self.run(input, 0, true)
     }
 
     /// Attempts to match `input` starting at byte offset `start_pos`.
     pub fn match_at(&self, input: &str, start_pos: usize) -> Option<Match> {
+        self.run(input, start_pos, false)
+    }
+
+    fn run(&self, input: &str, start_pos: usize, require_end: bool) -> Option<Match> {
         if !input.is_char_boundary(start_pos) {
             return None;
         }
@@ -146,6 +182,9 @@ impl Program {
             let op = ops.get(pc)?;
             match op {
                 Op::Match => {
+                    if require_end && pos != input.len() {
+                        backtrack!();
+                    }
                     let captures = build_captures(input, &caps);
                     return Some(Match {
                         start: start_pos,
@@ -247,15 +286,31 @@ impl Program {
                     }
                     pc += 1;
                 }
-                Op::OpenCapture(name) => {
+                Op::OpenCapture { name, site } => {
                     caps.push(CapEvent::Open {
                         name: name.clone(),
+                        site: *site,
                         pos,
                     });
                     pc += 1;
                 }
                 Op::CloseCapture => {
-                    caps.push(CapEvent::Close { pos });
+                    let (open_name, site, start) = find_matching_open(&caps)?;
+                    if let Some(ref name) = open_name {
+                        if let Some((prev_start, prev_end)) =
+                            find_first_closed_other_site(&caps, name, site)
+                        {
+                            if input[prev_start..prev_end] != input[start..pos] {
+                                backtrack!();
+                            }
+                        }
+                    }
+                    caps.push(CapEvent::Close {
+                        name: open_name,
+                        site,
+                        start,
+                        end: pos,
+                    });
                     pc += 1;
                 }
                 Op::NotStart(after_pc) => {
@@ -338,6 +393,43 @@ impl Program {
     }
 }
 
+fn find_matching_open(caps: &[CapEvent]) -> Option<(Option<String>, usize, usize)> {
+    let mut depth = 0usize;
+    for ev in caps.iter().rev() {
+        match ev {
+            CapEvent::Close { .. } => depth += 1,
+            CapEvent::Open { name, site, pos } => {
+                if depth == 0 {
+                    return Some((name.clone(), *site, *pos));
+                }
+                depth -= 1;
+            }
+        }
+    }
+    None
+}
+
+fn find_first_closed_other_site(
+    caps: &[CapEvent],
+    target: &str,
+    current_site: usize,
+) -> Option<(usize, usize)> {
+    for ev in caps {
+        if let CapEvent::Close {
+            name: Some(name),
+            site,
+            start,
+            end,
+        } = ev
+        {
+            if name == target && *site != current_site {
+                return Some((*start, *end));
+            }
+        }
+    }
+    None
+}
+
 fn build_captures(input: &str, events: &[CapEvent]) -> Vec<Capture> {
     struct OpenCap {
         name: Option<String>,
@@ -350,18 +442,18 @@ fn build_captures(input: &str, events: &[CapEvent]) -> Vec<Capture> {
 
     for ev in events {
         match ev {
-            CapEvent::Open { name, pos } => stack.push(OpenCap {
+            CapEvent::Open { name, pos, .. } => stack.push(OpenCap {
                 name: name.clone(),
                 start: *pos,
                 children: Vec::new(),
             }),
-            CapEvent::Close { pos } => {
+            CapEvent::Close { end, .. } => {
                 if let Some(open) = stack.pop() {
                     let cap = Capture {
                         name: open.name,
                         start: open.start,
-                        end: *pos,
-                        text: input[open.start..*pos].to_string(),
+                        end: *end,
+                        text: input[open.start..*end].to_string(),
                         children: open.children,
                     };
                     if let Some(parent) = stack.last_mut() {
@@ -415,11 +507,56 @@ fn match_builtin(builtin: &BuiltinMatcher, s: &str) -> Option<usize> {
     match builtin {
         BuiltinMatcher::Int { min, max } => match_int(s, *min, *max),
         BuiltinMatcher::Uint { min, max } => match_uint(s, *min, *max),
+        BuiltinMatcher::Float => match_float(s),
+        BuiltinMatcher::Bool => match_bool(s),
         BuiltinMatcher::Version => match_version(s),
         BuiltinMatcher::Date => match_date(s),
+        BuiltinMatcher::Datetime => match_datetime(s),
         BuiltinMatcher::Uuid => match_uuid(s),
+        BuiltinMatcher::Nanoid { length } => match_nanoid(s, *length),
         BuiltinMatcher::Case(style) => match_case(s, *style),
         BuiltinMatcher::Seg => match_seg(s),
+        BuiltinMatcher::Tree { .. } => None,
+    }
+}
+
+fn match_float(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut i = usize::from(b.first() == Some(&b'-'));
+    let int_digits = scan_digits(&s[i..]);
+    if int_digits == 0 {
+        return None;
+    }
+    i += int_digits;
+
+    if b.get(i) == Some(&b'.') {
+        let frac_digits = scan_digits(&s[i + 1..]);
+        if frac_digits > 0 {
+            i += 1 + frac_digits;
+        }
+    }
+
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        let mut exp_i = i + 1;
+        if matches!(b.get(exp_i), Some(b'+' | b'-')) {
+            exp_i += 1;
+        }
+        let exp_digits = scan_digits(&s[exp_i..]);
+        if exp_digits > 0 {
+            i = exp_i + exp_digits;
+        }
+    }
+
+    Some(i)
+}
+
+fn match_bool(s: &str) -> Option<usize> {
+    if s.starts_with("true") {
+        Some(4)
+    } else if s.starts_with("false") {
+        Some(5)
+    } else {
+        None
     }
 }
 
@@ -526,25 +663,113 @@ fn match_version(s: &str) -> Option<usize> {
     Some(i)
 }
 
-fn match_date(s: &str) -> Option<usize> {
+fn two_digits_at(b: &[u8]) -> Option<u8> {
+    if b.len() >= 2 && b[0].is_ascii_digit() && b[1].is_ascii_digit() {
+        Some((b[0] - b'0') * 10 + (b[1] - b'0'))
+    } else {
+        None
+    }
+}
+
+fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn parse_date_prefix(s: &str) -> Option<usize> {
     let b = s.as_bytes();
     if b.len() < 10 {
         return None;
     }
-    let is_digits = |slice: &[u8]| slice.iter().all(|c| c.is_ascii_digit());
-    if is_digits(&b[0..4])
-        && b[4] == b'-'
-        && is_digits(&b[5..7])
-        && b[7] == b'-'
-        && is_digits(&b[8..10])
-    {
-        let month: u8 = s[5..7].parse().ok()?;
-        let day: u8 = s[8..10].parse().ok()?;
-        if (1..=12).contains(&month) && (1..=31).contains(&day) {
-            return Some(10);
+    if !b[0..4].iter().all(|c| c.is_ascii_digit()) || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let year: u16 = s[0..4].parse().ok()?;
+    let month = two_digits_at(&b[5..7])?;
+    let day = two_digits_at(&b[8..10])?;
+    if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    Some(10)
+}
+
+fn parse_clock_prefix(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    if b.len() < 5 || b[2] != b':' {
+        return None;
+    }
+    let hours = two_digits_at(&b[0..2])?;
+    let minutes = two_digits_at(&b[3..5])?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    let mut len = 5usize;
+    if b.get(len) == Some(&b':') {
+        let sec = two_digits_at(b.get(len + 1..len + 3)?)?;
+        if sec > 59 {
+            return None;
+        }
+        len += 3;
+        if b.get(len) == Some(&b'.') {
+            let frac_digits = scan_digits(&s[len + 1..]);
+            if (1..=9).contains(&frac_digits) {
+                len += 1 + frac_digits;
+            }
         }
     }
-    None
+    Some(len)
+}
+
+fn parse_offset_prefix(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    if b.first() == Some(&b'Z') {
+        return Some(1);
+    }
+    if b.len() < 6 || !matches!(b[0], b'+' | b'-') || b[3] != b':' {
+        return None;
+    }
+    let hours = two_digits_at(&b[1..3])?;
+    let minutes = two_digits_at(&b[4..6])?;
+    if hours > 18 || minutes >= 60 {
+        return None;
+    }
+    Some(6)
+}
+
+fn match_date(s: &str) -> Option<usize> {
+    parse_date_prefix(s)
+}
+
+fn match_datetime(s: &str) -> Option<usize> {
+    let date_len = parse_date_prefix(s)?;
+    let rest = &s[date_len..];
+    if let Some(after_sep) = rest.strip_prefix('T').or_else(|| rest.strip_prefix(' ')) {
+        if let Some(clock_len) = parse_clock_prefix(after_sep) {
+            let mut len = date_len + 1 + clock_len;
+            if let Some(off_len) = parse_offset_prefix(&s[len..]) {
+                len += off_len;
+            }
+            return Some(len);
+        }
+    }
+    Some(date_len)
+}
+
+fn match_nanoid(s: &str, length: Option<usize>) -> Option<usize> {
+    let target = length.unwrap_or(DEFAULT_NANOID_LENGTH);
+    if target == 0 || s.len() < target {
+        return None;
+    }
+    let is_nanoid_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    if s.as_bytes()[..target].iter().all(|&b| is_nanoid_byte(b)) {
+        Some(target)
+    } else {
+        None
+    }
 }
 
 fn match_uuid(s: &str) -> Option<usize> {
@@ -730,5 +955,275 @@ mod tests {
         let matches = prog.find_all("use foo-bar and baz-qux!");
         let found: Vec<&str> = matches.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(found, vec!["use", "foo-bar", "and", "baz-qux"]);
+    }
+
+    #[test]
+    fn path_seg_and_tree_matching_and_backtracking() {
+        let seg_suffix = Program::compile(&Pattern::seq(vec![
+            Pattern::seg().capture(Some("stem".into())),
+            Pattern::lit(".rs"),
+        ]));
+        assert_eq!(
+            seg_suffix.match_full("lib.rs").unwrap().get("stem").unwrap().text,
+            "lib"
+        );
+        assert!(seg_suffix.match_full("src/lib.rs").is_none());
+        assert!(seg_suffix.match_full(".rs").is_none());
+
+        // Tree with suffix and directory boundary backtracking
+        let tree_dir = Program::compile(&Pattern::seq(vec![
+            Pattern::lit("src/"),
+            Pattern::tree(1, None).capture(Some("sub".into())),
+            Pattern::lit("/mod.rs"),
+        ]));
+        assert_eq!(
+            tree_dir
+                .match_full("src/a/b/mod.rs")
+                .unwrap()
+                .get("sub")
+                .unwrap()
+                .text,
+            "a/b"
+        );
+        assert!(tree_dir.match_full("src/mod.rs").is_none());
+        assert!(tree_dir.match_full("src//mod.rs").is_none());
+
+        let tree_ext = Program::compile(&Pattern::seq(vec![
+            Pattern::tree(1, Some(3)).capture(Some("path".into())),
+            Pattern::lit(".tmt"),
+        ]));
+        assert_eq!(
+            tree_ext
+                .match_full("a/b/c.tmt")
+                .unwrap()
+                .get("path")
+                .unwrap()
+                .text,
+            "a/b/c"
+        );
+        assert!(tree_ext.match_full("a/b/c/d.tmt").is_none());
+        assert!(tree_ext.match_full("/a/b.tmt").is_none());
+        assert!(tree_ext.match_full("a//b.tmt").is_none());
+        assert!(tree_ext.match_full("a/b/.tmt").is_none());
+
+        // min_depth: 0 allows empty match
+        let tree_opt = Program::compile(&Pattern::tree(0, Some(2)));
+        assert!(tree_opt.is_full_match(""));
+        assert!(tree_opt.is_full_match("a"));
+        assert!(tree_opt.is_full_match("a/b"));
+        assert!(!tree_opt.is_full_match("a/b/c"));
+    }
+
+    #[test]
+    fn float_bool_datetime_date_and_nanoid_builtins() {
+        let float_prog = Program::compile(&Pattern::Builtin(BuiltinMatcher::Float));
+        for ok in ["0", "42", "-7", "3.14", "-0.25", "1e10", "2.5E-3", "-1.0e+2"] {
+            assert!(float_prog.is_full_match(ok), "should match float: {ok}");
+        }
+        for bad in ["", "-", ".5", "3.", "1e", "1e+", "abc"] {
+            assert!(!float_prog.is_full_match(bad), "should reject float: {bad}");
+        }
+
+        let bool_prog = Program::compile(&Pattern::Builtin(BuiltinMatcher::Bool));
+        assert!(bool_prog.is_full_match("true"));
+        assert!(bool_prog.is_full_match("false"));
+        assert!(!bool_prog.is_full_match("trueish"));
+        assert!(!bool_prog.is_full_match("TRUE"));
+
+        let date_prog = Program::compile(&Pattern::Builtin(BuiltinMatcher::Date));
+        assert!(date_prog.is_full_match("2024-02-29"));
+        assert!(!date_prog.is_full_match("2026-02-29"));
+        assert!(!date_prog.is_full_match("2026-04-31"));
+        assert!(!date_prog.is_full_match("2026-10-25T09:00"));
+
+        let dt_prog = Program::compile(&Pattern::Builtin(BuiltinMatcher::Datetime));
+        for ok in [
+            "2026-10-25",
+            "2024-02-29T09:00",
+            "2026-10-25 09:00:00",
+            "2026-10-25T09:00:00Z",
+            "2026-10-25T09:00:00.5+09:00",
+            "2026-10-25 23:59:59.123456789-05:30",
+        ] {
+            assert!(dt_prog.is_full_match(ok), "should match datetime: {ok}");
+        }
+        for bad in [
+            "2026-02-29",
+            "2026-10-25T24:00",
+            "2026-10-25T09:60",
+            "2026-10-25T09:00:60",
+            "2026-10-25T09:00:00+19:00",
+            "2026-10-25T09:00:00.1234567890",
+        ] {
+            assert!(!dt_prog.is_full_match(bad), "should reject datetime: {bad}");
+        }
+
+        // Datetime must not swallow surrounding text separators
+        let dt_ctx = Program::compile(&Pattern::seq(vec![
+            Pattern::Builtin(BuiltinMatcher::Datetime).capture(Some("dt".into())),
+            Pattern::lit(" hello"),
+        ]));
+        assert_eq!(
+            dt_ctx
+                .match_full("2026-10-25 hello")
+                .unwrap()
+                .get("dt")
+                .unwrap()
+                .text,
+            "2026-10-25"
+        );
+
+        let nano_default = Program::compile(&Pattern::Builtin(BuiltinMatcher::Nanoid { length: None }));
+        assert!(nano_default.is_full_match("V1StGXR8_Z5jdHi6B-myT"));
+        assert!(!nano_default.is_full_match("V1StGXR8_Z5jdHi6B-my"));
+        assert!(!nano_default.is_full_match("V1StGXR8_Z5jdHi6B-myTX"));
+
+        let nano_8 = Program::compile(&Pattern::Builtin(BuiltinMatcher::Nanoid { length: Some(8) }));
+        assert!(nano_8.is_full_match("aB3_x-9Z"));
+        assert!(!nano_8.is_full_match("aB3_x-9!"));
+    }
+
+    #[test]
+    fn char_classes_sep_by_and_lookahead() {
+        let cls = Program::compile(&Pattern::seq(vec![
+            Pattern::range('a', 'z'),
+            Pattern::chars("_-"),
+            Pattern::not_chars("0123456789"),
+        ]));
+        assert!(cls.is_full_match("a-z"));
+        assert!(!cls.is_full_match("A-z"));
+        assert!(!cls.is_full_match("a-5"));
+
+        let list_prog = Program::compile(&Pattern::sep_by(
+            Pattern::Builtin(BuiltinMatcher::Int {
+                min: None,
+                max: None,
+            })
+            .capture(Some("n".into())),
+            Pattern::lit(", "),
+        ));
+        assert!(list_prog.is_full_match(""));
+        let m = list_prog.match_full("10, 20, -30").unwrap();
+        let nums: Vec<&str> = m.get_all("n").into_iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(nums, vec!["10", "20", "-30"]);
+        assert!(!list_prog.is_full_match("10, 20, "));
+
+        let list1 = Program::compile(&Pattern::sep_by1(
+            Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Kebab)),
+            Pattern::lit("/"),
+        ));
+        assert!(!list1.is_full_match(""));
+        assert!(list1.is_full_match("one/two-three"));
+
+        // Positive + negative lookahead
+        let la = Program::compile(&Pattern::seq(vec![
+            Pattern::followed_by(Pattern::lit("foo")),
+            Pattern::not_followed_by(Pattern::lit("foobar")),
+            Pattern::many1(Pattern::Class(CharClass::Alpha)).capture(Some("word".into())),
+        ]));
+        assert_eq!(la.match_full("foobaz").unwrap().get("word").unwrap().text, "foobaz");
+        assert!(la.match_full("foobar").is_none());
+        assert!(la.match_full("bar").is_none());
+    }
+
+    #[test]
+    fn repeated_binding_equality_and_greedy_backtracking() {
+        let any_word = Pattern::many1(Pattern::AnyChar {
+            cross_newline: false,
+        });
+        let pat = Pattern::seq(vec![
+            any_word.clone().capture(Some("x".into())),
+            Pattern::lit("-"),
+            any_word.clone().capture(Some("x".into())),
+        ]);
+        let prog = Program::compile(&pat);
+
+        // Simple equal vs unequal
+        assert_eq!(prog.match_full("foo-foo").unwrap().get("x").unwrap().text, "foo");
+        assert!(prog.match_full("foo-bar").is_none());
+
+        // Greedy shrinking across internal hyphens:
+        // First `x` initially grabs "a-a-a-a", shrinks until both sides are "a-a".
+        let m = prog.match_full("a-a-a-a").unwrap();
+        assert_eq!(m.get("x").unwrap().text, "a-a");
+        assert_eq!(m.get_all("x").len(), 2);
+
+        // Greedy prefix before middle wildcard must shrink for repeated binding to match
+        let bridged = Program::compile(&Pattern::seq(vec![
+            any_word.clone().capture(Some("x".into())),
+            Pattern::lit(":"),
+            any_word.clone().capture(Some("mid".into())),
+            Pattern::lit(":"),
+            any_word.clone().capture(Some("x".into())),
+        ]));
+        let mb = bridged.match_full("ab:cd:ef:ab").unwrap();
+        assert_eq!(mb.get("x").unwrap().text, "ab");
+        assert_eq!(mb.get("mid").unwrap().text, "cd:ef");
+
+        // Three occurrences of `x`
+        let triple = Program::compile(&Pattern::seq(vec![
+            any_word.clone().capture(Some("x".into())),
+            Pattern::lit("-"),
+            any_word.clone().capture(Some("x".into())),
+            Pattern::lit("-"),
+            any_word.clone().capture(Some("x".into())),
+        ]));
+        assert_eq!(
+            triple.match_full("ha-ha-ha").unwrap().get("x").unwrap().text,
+            "ha"
+        );
+        assert!(triple.match_full("ha-ho-ha").is_none());
+        assert!(triple.match_full("ha-ha-ho").is_none());
+
+        // Cross-site equality with sep_by: first `x` binds, all `x` inside sep_by must match it
+        let cross_sep = Program::compile(&Pattern::seq(vec![
+            any_word.clone().capture(Some("x".into())),
+            Pattern::lit(":"),
+            Pattern::sep_by1(any_word.clone().capture(Some("x".into())), Pattern::lit(",")),
+        ]));
+        assert!(cross_sep.is_full_match("ab:ab,ab"));
+        assert!(!cross_sep.is_full_match("ab:ab,cd"));
+
+        // Negative lookahead referencing an earlier binding: `<?(x)>-<?not_followed_by>[<?(x)>]<?>`
+        let not_same = Program::compile(&Pattern::seq(vec![
+            any_word.clone().capture(Some("x".into())),
+            Pattern::lit("-"),
+            Pattern::not_followed_by(any_word.clone().capture(Some("x".into()))),
+            any_word.capture(Some("y".into())),
+        ]));
+        assert_eq!(
+            not_same.match_full("ab-cd").unwrap().get("y").unwrap().text,
+            "cd"
+        );
+        assert!(not_same.match_full("ab-ab").is_none());
+    }
+
+    #[test]
+    fn lazy_repeat_backtracks_in_full_match() {
+        let lazy_pat = Pattern::seq(vec![
+            Pattern::repeat(
+                Pattern::AnyChar {
+                    cross_newline: false,
+                },
+                1,
+                None,
+                false,
+            )
+            .capture(Some("x".into())),
+            Pattern::lit("-"),
+            Pattern::repeat(
+                Pattern::AnyChar {
+                    cross_newline: false,
+                },
+                1,
+                None,
+                false,
+            )
+            .capture(Some("x".into())),
+        ]);
+        let prog = Program::compile(&lazy_pat);
+        // Lazy `x` tries "a" first (can't reach full end), backtracks to "a-a"
+        let m = prog.match_full("a-a-a-a").unwrap();
+        assert_eq!(m.get("x").unwrap().text, "a-a");
     }
 }

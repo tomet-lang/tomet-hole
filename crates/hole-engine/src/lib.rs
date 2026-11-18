@@ -6,8 +6,10 @@
 
 pub mod pattern;
 pub mod program;
+pub mod template;
 pub mod vm;
 
-pub use pattern::{BuiltinMatcher, CaseStyle, CharClass, Pattern};
+pub use pattern::{BuiltinMatcher, CaseStyle, CharClass, DEFAULT_NANOID_LENGTH, Pattern};
 pub use program::{Op, Program};
+pub use template::{Template, TemplateError};
 pub use vm::{Capture, Match};
