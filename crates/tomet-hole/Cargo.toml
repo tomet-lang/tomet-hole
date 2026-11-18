@@ -1,0 +1,15 @@
+[package]
+name         = "tomet-hole"
+description  = "Bridge between Tomet Hole AST nodes and hole-engine"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[dependencies]
+hole-engine  = { workspace = true }
+tomet-ast    = { workspace = true }
+tomet-scalar = { workspace = true }
+
+[dev-dependencies]
+tomet-ast-parser = { workspace = true }
