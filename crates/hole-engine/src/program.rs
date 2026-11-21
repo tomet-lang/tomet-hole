@@ -6,10 +6,15 @@ use crate::pattern::{BuiltinMatcher, CharClass, Pattern};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     Literal(String),
-    AnyChar { cross_newline: bool },
+    AnyChar {
+        cross_newline: bool,
+    },
     Class(CharClass),
     Builtin(BuiltinMatcher),
-    Balanced { open: String, close: String },
+    Balanced {
+        open: String,
+        close: String,
+    },
     StartAnchor,
     EndAnchor,
     WordBoundary,
@@ -22,7 +27,10 @@ pub enum Op {
     /// Pop the top backtrack frame and continue to `pc + 1`.
     DropChoice,
     /// Begin a capture group at the current byte position with a distinct pattern site ID.
-    OpenCapture { name: Option<String>, site: usize },
+    OpenCapture {
+        name: Option<String>,
+        site: usize,
+    },
     /// End the most recently opened capture group.
     CloseCapture,
     /// Begin a negative lookahead (`Not`): if body succeeds, fail outer via `NotFail`.
@@ -102,13 +110,8 @@ impl CompileCtx {
                     max_depth,
                 } => {
                     let seg = Pattern::many1(Pattern::not_chars("/"));
-                    let tree = Pattern::sep_by_range(
-                        seg,
-                        Pattern::lit("/"),
-                        *min_depth,
-                        *max_depth,
-                        true,
-                    );
+                    let tree =
+                        Pattern::sep_by_range(seg, Pattern::lit("/"), *min_depth, *max_depth, true);
                     self.compile(&tree);
                 }
                 _ => self.ops.push(Op::Builtin(b.clone())),
@@ -200,13 +203,7 @@ impl CompileCtx {
         }
     }
 
-    fn compile_repeat(
-        &mut self,
-        inner: &Pattern,
-        min: usize,
-        max: Option<usize>,
-        greedy: bool,
-    ) {
+    fn compile_repeat(&mut self, inner: &Pattern, min: usize, max: Option<usize>, greedy: bool) {
         if max.is_some_and(|m| m < min) {
             self.emit_fail();
             return;

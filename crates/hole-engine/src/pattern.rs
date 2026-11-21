@@ -47,10 +47,7 @@ pub enum Pattern {
         inner: Box<Pattern>,
     },
     /// Comby-style balanced delimiter matcher (`open` ... `close`, supporting nesting).
-    Balanced {
-        open: String,
-        close: String,
-    },
+    Balanced { open: String, close: String },
     /// Built-in structured matcher (types, naming conventions, path segments).
     Builtin(BuiltinMatcher),
 }
@@ -114,15 +111,9 @@ pub const DEFAULT_NANOID_LENGTH: usize = 21;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuiltinMatcher {
     /// Signed integer (`-?[0-9]+`), optionally bounded by `min..=max`.
-    Int {
-        min: Option<i64>,
-        max: Option<i64>,
-    },
+    Int { min: Option<i64>, max: Option<i64> },
     /// Unsigned integer (`[0-9]+`), optionally bounded by `min..=max`.
-    Uint {
-        min: Option<u64>,
-        max: Option<u64>,
-    },
+    Uint { min: Option<u64>, max: Option<u64> },
     /// Floating-point number (`-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?`).
     Float,
     /// Boolean literal (`true` or `false`).
@@ -136,9 +127,7 @@ pub enum BuiltinMatcher {
     /// Canonical hyphenated UUID (`8-4-4-4-12` hex digits).
     Uuid,
     /// URL-safe NanoID (`[A-Za-z0-9_-]{N}`), defaulting to [`DEFAULT_NANOID_LENGTH`] (21) characters.
-    Nanoid {
-        length: Option<usize>,
-    },
+    Nanoid { length: Option<usize> },
     /// Naming convention matcher.
     Case(CaseStyle),
     /// Non-empty single path segment (never crosses `/`).

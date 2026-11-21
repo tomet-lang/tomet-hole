@@ -1,6 +1,6 @@
 [package]
-name         = "tomet-hole"
-description  = "Bridge between Tomet Hole AST nodes and hole-engine"
+name                   = "tomet-hole"
+description            = "Bridge between Tomet Hole AST nodes and hole-engine"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

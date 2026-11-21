@@ -1,6 +1,6 @@
 [package]
-name         = "hole-engine"
-description  = "Pure, Tomet-independent pattern matching engine for hole-based patterns"
+name                   = "hole-engine"
+description            = "Pure, Tomet-independent pattern matching engine for hole-based patterns"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

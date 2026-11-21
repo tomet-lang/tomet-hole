@@ -794,7 +794,12 @@ fn match_uuid(s: &str) -> Option<usize> {
     }
 }
 
-fn match_separated_case(s: &str, sep: u8, allow_alt_sep: Option<u8>, uppercase: bool) -> Option<usize> {
+fn match_separated_case(
+    s: &str,
+    sep: u8,
+    allow_alt_sep: Option<u8>,
+    uppercase: bool,
+) -> Option<usize> {
     let b = s.as_bytes();
     let is_atom = |c: u8| {
         if uppercase {
@@ -941,7 +946,10 @@ mod tests {
         assert_eq!(m.get("crate").unwrap().text, "catasto");
         assert_eq!(m.get("ver").unwrap().text, "1.0.0");
 
-        assert!(prog.match_full("deprecated-old@1.0.0.vocabulary.tmt").is_none());
+        assert!(
+            prog.match_full("deprecated-old@1.0.0.vocabulary.tmt")
+                .is_none()
+        );
     }
 
     #[test]
@@ -964,7 +972,12 @@ mod tests {
             Pattern::lit(".rs"),
         ]));
         assert_eq!(
-            seg_suffix.match_full("lib.rs").unwrap().get("stem").unwrap().text,
+            seg_suffix
+                .match_full("lib.rs")
+                .unwrap()
+                .get("stem")
+                .unwrap()
+                .text,
             "lib"
         );
         assert!(seg_suffix.match_full("src/lib.rs").is_none());
@@ -1017,7 +1030,9 @@ mod tests {
     #[test]
     fn float_bool_datetime_date_and_nanoid_builtins() {
         let float_prog = Program::compile(&Pattern::Builtin(BuiltinMatcher::Float));
-        for ok in ["0", "42", "-7", "3.14", "-0.25", "1e10", "2.5E-3", "-1.0e+2"] {
+        for ok in [
+            "0", "42", "-7", "3.14", "-0.25", "1e10", "2.5E-3", "-1.0e+2",
+        ] {
             assert!(float_prog.is_full_match(ok), "should match float: {ok}");
         }
         for bad in ["", "-", ".5", "3.", "1e", "1e+", "abc"] {
@@ -1073,12 +1088,15 @@ mod tests {
             "2026-10-25"
         );
 
-        let nano_default = Program::compile(&Pattern::Builtin(BuiltinMatcher::Nanoid { length: None }));
+        let nano_default =
+            Program::compile(&Pattern::Builtin(BuiltinMatcher::Nanoid { length: None }));
         assert!(nano_default.is_full_match("V1StGXR8_Z5jdHi6B-myT"));
         assert!(!nano_default.is_full_match("V1StGXR8_Z5jdHi6B-my"));
         assert!(!nano_default.is_full_match("V1StGXR8_Z5jdHi6B-myTX"));
 
-        let nano_8 = Program::compile(&Pattern::Builtin(BuiltinMatcher::Nanoid { length: Some(8) }));
+        let nano_8 = Program::compile(&Pattern::Builtin(BuiltinMatcher::Nanoid {
+            length: Some(8),
+        }));
         assert!(nano_8.is_full_match("aB3_x-9Z"));
         assert!(!nano_8.is_full_match("aB3_x-9!"));
     }
@@ -1104,7 +1122,11 @@ mod tests {
         ));
         assert!(list_prog.is_full_match(""));
         let m = list_prog.match_full("10, 20, -30").unwrap();
-        let nums: Vec<&str> = m.get_all("n").into_iter().map(|c| c.text.as_str()).collect();
+        let nums: Vec<&str> = m
+            .get_all("n")
+            .into_iter()
+            .map(|c| c.text.as_str())
+            .collect();
         assert_eq!(nums, vec!["10", "20", "-30"]);
         assert!(!list_prog.is_full_match("10, 20, "));
 
@@ -1121,7 +1143,10 @@ mod tests {
             Pattern::not_followed_by(Pattern::lit("foobar")),
             Pattern::many1(Pattern::Class(CharClass::Alpha)).capture(Some("word".into())),
         ]));
-        assert_eq!(la.match_full("foobaz").unwrap().get("word").unwrap().text, "foobaz");
+        assert_eq!(
+            la.match_full("foobaz").unwrap().get("word").unwrap().text,
+            "foobaz"
+        );
         assert!(la.match_full("foobar").is_none());
         assert!(la.match_full("bar").is_none());
     }
@@ -1139,7 +1164,10 @@ mod tests {
         let prog = Program::compile(&pat);
 
         // Simple equal vs unequal
-        assert_eq!(prog.match_full("foo-foo").unwrap().get("x").unwrap().text, "foo");
+        assert_eq!(
+            prog.match_full("foo-foo").unwrap().get("x").unwrap().text,
+            "foo"
+        );
         assert!(prog.match_full("foo-bar").is_none());
 
         // Greedy shrinking across internal hyphens:
@@ -1169,7 +1197,12 @@ mod tests {
             any_word.clone().capture(Some("x".into())),
         ]));
         assert_eq!(
-            triple.match_full("ha-ha-ha").unwrap().get("x").unwrap().text,
+            triple
+                .match_full("ha-ha-ha")
+                .unwrap()
+                .get("x")
+                .unwrap()
+                .text,
             "ha"
         );
         assert!(triple.match_full("ha-ho-ha").is_none());
@@ -1179,7 +1212,10 @@ mod tests {
         let cross_sep = Program::compile(&Pattern::seq(vec![
             any_word.clone().capture(Some("x".into())),
             Pattern::lit(":"),
-            Pattern::sep_by1(any_word.clone().capture(Some("x".into())), Pattern::lit(",")),
+            Pattern::sep_by1(
+                any_word.clone().capture(Some("x".into())),
+                Pattern::lit(","),
+            ),
         ]));
         assert!(cross_sep.is_full_match("ab:ab,ab"));
         assert!(!cross_sep.is_full_match("ab:ab,cd"));

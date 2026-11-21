@@ -66,7 +66,10 @@ pub fn compile_blocks(blocks: &[Block]) -> Result<Pattern, CompileError> {
 }
 
 /// Compiles a slice of [`Block`]s into a [`Pattern`] under the given [`CompileMode`].
-pub fn compile_blocks_with_mode(blocks: &[Block], mode: CompileMode) -> Result<Pattern, CompileError> {
+pub fn compile_blocks_with_mode(
+    blocks: &[Block],
+    mode: CompileMode,
+) -> Result<Pattern, CompileError> {
     if blocks.is_empty() {
         return Ok(Pattern::Literal(String::new()));
     }
@@ -167,7 +170,10 @@ pub fn compile_hole_with_mode(hole: &Hole, mode: CompileMode) -> Result<Pattern,
                     )));
                 }
             }
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Int { min, max }))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Int { min, max }),
+            )
         }
         Some("uint") => {
             let bind_name = take_no_positional_args(args, "uint")?;
@@ -180,7 +186,10 @@ pub fn compile_hole_with_mode(hole: &Hole, mode: CompileMode) -> Result<Pattern,
                     )));
                 }
             }
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Uint { min, max }))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Uint { min, max }),
+            )
         }
         Some("float") => {
             let bind_name = take_no_positional_args(args, "float")?;
@@ -212,23 +221,38 @@ pub fn compile_hole_with_mode(hole: &Hole, mode: CompileMode) -> Result<Pattern,
             if length == Some(0) {
                 return Err(CompileError::new("`<?nanoid>` `length` must be at least 1"));
             }
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Nanoid { length }))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Nanoid { length }),
+            )
         }
         Some("kebab") => {
             let bind_name = take_no_positional_args(args, "kebab")?;
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Kebab)))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Kebab)),
+            )
         }
         Some("snake") => {
             let bind_name = take_no_positional_args(args, "snake")?;
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Snake)))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Snake)),
+            )
         }
         Some("camel") => {
             let bind_name = take_no_positional_args(args, "camel")?;
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Camel)))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Camel)),
+            )
         }
         Some("pascal") => {
             let bind_name = take_no_positional_args(args, "pascal")?;
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Pascal)))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Pascal)),
+            )
         }
         Some("screaming_snake") => {
             let bind_name = take_no_positional_args(args, "screaming_snake")?;
@@ -239,7 +263,10 @@ pub fn compile_hole_with_mode(hole: &Hole, mode: CompileMode) -> Result<Pattern,
         }
         Some("slug") => {
             let bind_name = take_no_positional_args(args, "slug")?;
-            (bind_name, Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Slug)))
+            (
+                bind_name,
+                Pattern::Builtin(BuiltinMatcher::Case(CaseStyle::Slug)),
+            )
         }
         Some("seg") => {
             let bind_name = take_no_positional_args(args, "seg")?;
@@ -360,9 +387,7 @@ pub fn compile_hole_with_mode(hole: &Hole, mode: CompileMode) -> Result<Pattern,
             (bind_name, Pattern::Balanced { open, close })
         }
         Some(other) => {
-            return Err(CompileError::new(format!(
-                "unknown hole matcher `{other}`"
-            )));
+            return Err(CompileError::new(format!("unknown hole matcher `{other}`")));
         }
     };
 
@@ -408,7 +433,10 @@ fn compile_sep_by(
         let sep = compile_value_pattern(pos[1], mode)?;
         (bind_name, item, sep)
     };
-    Ok((bind_name, Pattern::sep_by_range(item, sep, min, max, greedy)))
+    Ok((
+        bind_name,
+        Pattern::sep_by_range(item, sep, min, max, greedy),
+    ))
 }
 
 fn resolve_inner_pattern(
@@ -438,7 +466,10 @@ fn resolve_inner_pattern(
     }
 }
 
-fn compile_alt(args: Option<&Tuple>, mode: CompileMode) -> Result<(Option<String>, Pattern), CompileError> {
+fn compile_alt(
+    args: Option<&Tuple>,
+    mode: CompileMode,
+) -> Result<(Option<String>, Pattern), CompileError> {
     let unnamed = unnamed_entries(args);
     let (bind_name, items): (Option<String>, Vec<&Value>) = match unnamed.as_slice() {
         [Value::Tuple(tuple)] => (None, tuple.values().collect()),
@@ -449,10 +480,7 @@ fn compile_alt(args: Option<&Tuple>, mode: CompileMode) -> Result<(Option<String
         items if items.len() >= 2 && matches!(items[0], Value::Blocks(_) | Value::Hole(_)) => {
             (None, items.to_vec())
         }
-        items
-            if items.len() >= 3
-                && matches!(items[1], Value::Blocks(_) | Value::Hole(_)) =>
-        {
+        items if items.len() >= 3 && matches!(items[1], Value::Blocks(_) | Value::Hole(_)) => {
             let name = parse_bind_name_value(items[0], "alt")?;
             (Some(name), items[1..].to_vec())
         }
@@ -575,7 +603,9 @@ fn opt_int(group: Option<&Group>, key: &str) -> Result<Option<i64>, CompileError
     };
     match val {
         Value::Scalar(Scalar::Int(n)) => Ok(Some(*n)),
-        _ => Err(CompileError::new(format!("option `{key}` must be an integer"))),
+        _ => Err(CompileError::new(format!(
+            "option `{key}` must be an integer"
+        ))),
     }
 }
 
@@ -590,7 +620,11 @@ fn opt_uint(group: Option<&Group>, key: &str, matcher: &str) -> Result<Option<u6
     })
 }
 
-fn opt_usize(group: Option<&Group>, key: &str, matcher: &str) -> Result<Option<usize>, CompileError> {
+fn opt_usize(
+    group: Option<&Group>,
+    key: &str,
+    matcher: &str,
+) -> Result<Option<usize>, CompileError> {
     let Some(val) = opt_int(group, key)? else {
         return Ok(None);
     };
@@ -607,7 +641,9 @@ fn opt_bool(group: Option<&Group>, key: &str) -> Result<Option<bool>, CompileErr
     };
     match val {
         Value::Scalar(Scalar::Bool(b)) => Ok(Some(*b)),
-        _ => Err(CompileError::new(format!("option `{key}` must be a boolean"))),
+        _ => Err(CompileError::new(format!(
+            "option `{key}` must be a boolean"
+        ))),
     }
 }
 
@@ -617,7 +653,9 @@ fn opt_text(group: Option<&Group>, key: &str) -> Result<Option<String>, CompileE
     };
     match val {
         Value::Scalar(Scalar::Text(s)) => Ok(Some(s.clone())),
-        _ => Err(CompileError::new(format!("option `{key}` must be a string"))),
+        _ => Err(CompileError::new(format!(
+            "option `{key}` must be a string"
+        ))),
     }
 }
 
@@ -681,7 +719,11 @@ mod tests {
         let pat = compile_path_str("tmtroot/<?tree(sub)>.tmt").unwrap();
         let prog = Program::compile(&pat);
         assert_eq!(
-            prog.match_full("tmtroot/intro.tmt").unwrap().get("sub").unwrap().text,
+            prog.match_full("tmtroot/intro.tmt")
+                .unwrap()
+                .get("sub")
+                .unwrap()
+                .text,
             "intro"
         );
         assert_eq!(
@@ -765,12 +807,17 @@ mod tests {
                 .text,
             "1, 2, -3"
         );
-        assert_eq!(prog.match_full("[]").unwrap().get("items").unwrap().text, "");
+        assert_eq!(
+            prog.match_full("[]").unwrap().get("items").unwrap().text,
+            ""
+        );
         assert!(prog.match_full("[1, 2,]").is_none());
 
         // Content form of sep_by with distinct captured items
         let pat_content = compile_str("<?sep_by(\", \")>[<?int(n)>]").unwrap();
-        let m_items = Program::compile(&pat_content).match_full("10, 20, 30").unwrap();
+        let m_items = Program::compile(&pat_content)
+            .match_full("10, 20, 30")
+            .unwrap();
         let vals: Vec<&str> = m_items
             .get_all("n")
             .into_iter()
@@ -790,7 +837,15 @@ mod tests {
 
         let many1_prog = Program::compile(&compile_str("<?many1(xs)>[a]").unwrap());
         assert!(!many1_prog.is_full_match(""));
-        assert_eq!(many1_prog.match_full("aaa").unwrap().get("xs").unwrap().text, "aaa");
+        assert_eq!(
+            many1_prog
+                .match_full("aaa")
+                .unwrap()
+                .get("xs")
+                .unwrap()
+                .text,
+            "aaa"
+        );
 
         let seg_in_text = Program::compile(&compile_str("<?seg(dir)>/<?seg(file)>").unwrap());
         let sm = seg_in_text.match_full("crates/tomet-hole").unwrap();

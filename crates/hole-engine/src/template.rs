@@ -65,9 +65,8 @@ impl Template {
                 )));
             };
             let expr = &after_open[..close];
-            let name = parse_placeholder(expr).map_err(|msg| {
-                TemplateError::new(format!("{msg} (at byte {})", offset + open))
-            })?;
+            let name = parse_placeholder(expr)
+                .map_err(|msg| TemplateError::new(format!("{msg} (at byte {})", offset + open)))?;
             pieces.push(Piece::Capture(name.to_string()));
 
             let advance = open + 2 + close + 1;
